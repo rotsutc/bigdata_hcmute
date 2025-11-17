@@ -5,15 +5,18 @@ import pandas as pd
 from datetime import datetime, timedelta
 import time
 import sys
+import pytz   # <--- thêm pytz
+
+# --- TIMEZONE GMT+7 ---
+tz = pytz.timezone("Asia/Ho_Chi_Minh")
 
 # --- BƯỚC QUAN TRỌNG: ĐIỀN THÔNG TIN CLOUD CỦA BẠN VÀO ĐÂY ---
-# Phải giống hệt file producer_cloud.py
 REDIS_HOST = "redis-18772.c277.us-east-1-3.ec2.cloud.redislabs.com"
 REDIS_PORT = 18772
 REDIS_PASSWORD = "E5mAvNKAQagrqsm5o1PcemVEoSk96rQu"
 # -------------------------------------------------------------
 
-RAW_TOPIC_NAME = "price_raw_topic" # Kênh để lắng nghe
+RAW_TOPIC_NAME = "price_raw_topic"
 
 st.set_page_config(
     page_title="Live Dashboard (Streaming Data)",
@@ -24,10 +27,9 @@ st.set_page_config(
 st.title("📈 Live Dashboard (Xử lý Streaming Data)")
 st.info(f"Đang lắng nghe từ: `{RAW_TOPIC_NAME}`")
 
-# --- Kết nối Redis (Hàm cache_resource để kết nối 1 lần) ---
+# --- Redis connection ---
 @st.cache_resource
 def get_redis_connection():
-    """Tạo kết nối Redis Cloud và subscribe vào kênh."""
     try:
         r = redis.Redis(
             host=REDIS_HOST,
@@ -38,67 +40,69 @@ def get_redis_connection():
         r.ping()
         p = r.pubsub(ignore_subscribe_messages=True)
         p.subscribe(RAW_TOPIC_NAME)
-        #st.success(f"Đã kết nối và lắng nghe Redis Cloud tại {REDIS_HOST}")
         return p
-    except redis.exceptions.ConnectionError as e:
-        st.error(f"Lỗi: Không thể kết nối Redis Cloud.")
-        st.error("Vui lòng kiểm tra lại 3 biến REDIS_HOST, PORT, PASSWORD.")
+    except redis.exceptions.ConnectionError:
+        st.error("Lỗi: Không thể kết nối Redis Cloud.")
+        st.error("Vui lòng kiểm tra lại REDIS_HOST, PORT, PASSWORD.")
         return None
 
 pubsub_connection = get_redis_connection()
-
 if pubsub_connection is None:
     sys.exit(1)
 
-# --- Khởi tạo State (Biến nhớ) ---
+# --- State ---
 if 'data_history' not in st.session_state:
     st.session_state.data_history = []
 if 'latest_data' not in st.session_state:
     st.session_state.latest_data = {}
 
-# --- Placeholder (Vị trí giữ chỗ) ---
 placeholder_metrics = st.empty()
 placeholder_chart = st.empty()
 
-# --- Vòng lặp chính của Streamlit (Consumer) ---
+# --- Main streaming loop ---
 while True:
-    # 1. LẤY DỮ LIỆU TỪ REDIS CLOUD
+
+    # 1. Lấy dữ liệu từ Redis
     message = pubsub_connection.get_message()
     
     if message:
         try:
             data = json.loads(message['data'])
-            data["ts"] = datetime.fromisoformat(data["ts"])
+
+            # CHUYỂN VỀ GMT+7
+            ts = datetime.fromisoformat(data["ts"])
+            data["ts"] = ts.astimezone(tz)
+
             st.session_state.data_history.append(data)
             st.session_state.latest_data = data
-        except (json.JSONDecodeError, TypeError):
-            pass 
 
-    # 2. LỌC DỮ LIỆU CŨ (Chỉ giữ 1 giờ)
-    now = datetime.now()
+        except (json.JSONDecodeError, TypeError, KeyError):
+            pass
+
+    # 2. Lọc dữ liệu cũ (1 giờ)
+    now = datetime.now(tz)
     one_hour_ago = now - timedelta(hours=1)
     
     st.session_state.data_history = [
         d for d in st.session_state.data_history if d["ts"] > one_hour_ago
     ]
 
-    # Nếu không có dữ liệu, hiển thị chờ
     if not st.session_state.data_history:
         with placeholder_metrics.container():
             st.info("Đang chờ dữ liệu từ producer...")
-        time.sleep(1) 
-        st.rerun() 
+        time.sleep(1)
+        st.rerun()
 
-    # 3. XỬ LÝ (PANDAS)
+    # 3. Pandas DataFrame
     df = pd.DataFrame(st.session_state.data_history).set_index("ts")
-    
-    # 4. TÍNH TOÁN THỐNG KÊ
+
+    # 4. Tính toán thống kê
     one_min_ago = now - timedelta(minutes=1)
     df_1_min = df[df.index > one_min_ago]
     df_1_hour = df
     last_data = st.session_state.latest_data
 
-    # 5. CẬP NHẬT GIAO DIỆN
+    # 5. Update UI
     with placeholder_metrics.container():
         st.header(f"Giá hiện tại (cập nhật lúc: {last_data.get('ts', now).strftime('%H:%M:%S')})")
         
@@ -135,6 +139,6 @@ while True:
         st.header("Biểu đồ xu hướng (1 giờ gần nhất)")
         st.line_chart(df[['gold', 'usd']])
 
-    # 6. NGỦ VÀ CHẠY LẠI
+    # 6. Sleep & rerun
     time.sleep(1)
     st.rerun()
