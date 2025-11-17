@@ -5,15 +5,15 @@ from datetime import datetime
 import json
 import redis
 import sys
+import pytz   # <--- Thêm thư viện pytz
 
 # --- BƯỚC QUAN TRỌNG: ĐIỀN THÔNG TIN CLOUD CỦA BẠN VÀO ĐÂY ---
-# Lấy từ tài khoản Redis.com miễn phí của bạn (xem Bước 1)
-REDIS_HOST = "redis-18772.c277.us-east-1-3.ec2.cloud.redislabs.com"  # Ví dụ: redis-12345.c1.us-east-1-2.ec2.cloud.redislabs.com
-REDIS_PORT = 18772                      # Ví dụ: 12345
-REDIS_PASSWORD = "E5mAvNKAQagrqsm5o1PcemVEoSk96rQu" # Mật khẩu của bạn
+REDIS_HOST = "redis-18772.c277.us-east-1-3.ec2.cloud.redislabs.com"
+REDIS_PORT = 18772
+REDIS_PASSWORD = "E5mAvNKAQagrqsm5o1PcemVEoSk96rQu"
 # -------------------------------------------------------------
 
-RAW_TOPIC_NAME = "price_raw_topic" # Kênh để gửi dữ liệu
+RAW_TOPIC_NAME = "price_raw_topic"
 
 st.set_page_config(
     page_title="Producer (Gửi dữ liệu giả lập)",
@@ -21,7 +21,10 @@ st.set_page_config(
     layout="wide",
 )
 
-# --- Kết nối Redis (Giờ đây kết nối ra Cloud) ---
+# --- Khởi tạo timezone GMT+7 ---
+tz = pytz.timezone("Asia/Ho_Chi_Minh")
+
+# --- Kết nối Redis ---
 try:
     r = redis.Redis(
         host=REDIS_HOST,
@@ -30,14 +33,12 @@ try:
         db=0,
         decode_responses=True
     )
-    r.ping() # Kiểm tra kết nối
-    #st.sidebar.success(f"Đã kết nối Redis Cloud tại {REDIS_HOST}")
+    r.ping()
 except redis.exceptions.ConnectionError as e:
-    st.error(f"Lỗi: Không thể kết nối Redis Cloud.")
+    st.error("Lỗi: Không thể kết nối Redis Cloud.")
     st.error("Vui lòng kiểm tra lại 3 biến REDIS_HOST, PORT, PASSWORD.")
     st.error(f"Chi tiết lỗi: {e}")
     sys.exit(1)
-
 
 st.title("📡 Producer (Gửi dữ liệu giả lập)")
 
@@ -50,8 +51,8 @@ if "latest_data" not in st.session_state:
 # Hàm sinh dữ liệu
 def generate_record():
     return {
-        "ts": datetime.now().isoformat(), 
-        "gold": round(random.uniform(70, 80), 2), 
+        "ts": datetime.now(tz).isoformat(),  # <--- Giờ GMT+7
+        "gold": round(random.uniform(70, 80), 2),
         "usd": round(random.uniform(25.40, 25.50), 4),
     }
 
@@ -64,7 +65,7 @@ if col2.button("⏹ Stop Streaming"):
 
 placeholder = st.empty()
 
-# Vòng lặp: Nếu đang chạy -> gửi dữ liệu vào Redis Cloud
+# Vòng lặp gửi dữ liệu
 if st.session_state.run:
     st.success("Trạng thái: Đang chạy... (gửi 1 sự kiện/giây)")
     
